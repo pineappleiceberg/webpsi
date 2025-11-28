@@ -1,0 +1,9 @@
+emcmake cmake -S . -B build-wasm \
+  -DPSI_WITH_BLAKE3_HASH=ON \
+  -DCMAKE_EXE_LINKER_FLAGS="-O3 \
+    -s MODULARIZE=1 \
+    -s ENVIRONMENT=web \
+    -s EXPORTED_FUNCTIONS=['_malloc','_free','_psi_gc_create','_psi_gc_destroy','_psi_gc_prepare_circuit','_psi_gc_compute','_psi_hash_only_compute','_psi_blake3_hash_bytes'] \
+    -s EXPORTED_RUNTIME_METHODS=['cwrap','getValue','setValue','HEAPU8']"
+
+cmake --build build-wasm -j"$(nproc)"
