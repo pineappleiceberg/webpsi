@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PSI Demo – Hash-only vs GC-backed</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 2rem;
+      max-width: 1100px;
+    }
+    h1, h2, h3 {
+      margin-bottom: 0.5rem;
+    }
+    textarea {
+      width: 100%;
+      min-height: 8rem;
+      margin-bottom: 0.5rem;
+      font-family: monospace;
+    }
+    input[type="number"] {
+      width: 6rem;
+      padding: 0.25rem;
+      margin-left: 0.5rem;
+    }
+    button {
+      padding: 0.4rem 1rem;
+      margin-right: 0.5rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #eee;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      margin-top: 1.5rem;
+    }
+    .col {
+      flex: 1 1 320px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 1rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .label {
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+    pre {
+      background: #f7f7f7;
+      padding: 0.75rem;
+      border-radius: 4px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.85rem;
+    }
+    .metric {
+      font-size: 0.9rem;
+      margin-top: 0.5rem;
+    }
+  .metric span {
+    font-weight: 600;
+  }
+  .metric-box {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    border: 1px solid #e0e0e0;
+    background: #f9fafb;
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+  .metric-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.15rem;
+  }
+  .metric-label {
+    font-weight: 600;
+  }
+  .metric-value {
+    font-family: Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
+    .pill {
+      display: inline-block;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      margin-left: 0.4rem;
+    }
+    .pill-fast {
+      background: #e0f7fa;
+      color: #006064;
+    }
+    .pill-strong {
+      background: #e8f5e9;
+      color: #1b5e20;
+    }
+    .pill-warning {
+      background: #fff8e1;
+      color: #ff6f00;
+    }
+  </style>
+</head>
+
+<script
+  id="MathJax-script"
+  async
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+<body>
+  <h1>Private Set Intersection Demo</h1>
+  <p>
+    This demo compares two PSI flavors using the same C core compiled to WebAssembly:
+    a <strong>hash-only</strong> PSI (naive memcmp over fixed-size digests) and a
+    <strong>GC-backed</strong> PSI that uses a Yao garbled-circuit equality under the hood.
+  </p>
+
+  <h2>Inputs</h2>
+  <p>
+    Enter sets for Alice and Bob (one item per line or comma-separated), or generate random sets
+    of size <code>N</code>:
+  </p>
+  <div>
+    <label for="countInput">N for auto-generate:</label>
+    <input id="countInput" type="number" value="64" min="1" />
+    <button id="btn-generate">Generate random sets</button>
+  </div>
+
+  <div class="label" style="margin-top:1rem;">Alice&apos;s set</div>
+  <textarea id="alice" placeholder="alice@example.com&#10;bob@example.com&#10;carol@example.com"></textarea>
+
+  <div class="label">Bob&apos;s set</div>
+  <textarea id="bob" placeholder="bob@example.com&#10;dave@example.com&#10;carol@example.com"></textarea>
+
+  <button id="btn-run">Run PSI (hash-only &amp; GC)</button>
+
+  <div class="row">
+    <div class="col">
+      <h3>Hash-only PSI <span class="pill pill-fast">fast</span></h3>
+      <div class="metric-box">
+        <div class="metric-row">
+          <div class="metric-label">Runtime</div>
+          <div class="metric-value"><span id="time-hash">–</span> ms</div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-label">Intersection size</div>
+          <div class="metric-value"><span id="size-hash">–</span></div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-label">Elements used</div>
+          <div class="metric-value"><span id="count-used">–</span></div>
+        </div>
+
+        <h4 style="margin-top:0.75rem; margin-bottom:0.25rem;">Intersection</h4>
+        <pre id="out-hash">(no run yet)</pre>
+      </div>
+
+      <p style="font-size:0.8rem; margin-top:0.5rem;">
+        Hash-only PSI hashes each item to a fixed-size digest and compares digests directly
+        (naive O(n×m) in this demo). It&apos;s very fast and simple, but if the input space is small
+        or structured, parties can potentially perform offline dictionary attacks on the digests.
+      </p>
+    </div>
+
+    <div class="col">
+      <h3>GC-backed PSI <span class="pill pill-strong">GC equality</span></h3>
+      <div class="metric-box">
+        <div class="metric-row">
+          <div class="metric-label">Runtime</div>
+          <div class="metric-value"><span id="time-gc">–</span> ms</div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-label">Intersection size</div>
+          <div class="metric-value"><span id="size-gc">–</span></div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-label">Elements used</div>
+          <div class="metric-value"><span id="count-used-gc">–</span></div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-label">Speed ratio vs hash-only</div>
+          <div class="metric-value"><span id="ratio">–</span></div>
+        </div>
+        <h4 style="margin-top:0.75rem; margin-bottom:0.25rem;">Intersection</h4>
+        <pre id="out-gc">(no run yet)</pre>
+      </div>
+      <h4>Notes on security &amp; performance</h4>
+      <pre>
+This path uses a Yao garbled-circuit equality on each pair of fixed-size digests
+inside the same C core used for native tests. In a full 2-party protocol with OT
+and a network layer, GC-based PSI would let each party learn only the intersection
+and nothing else about the other party&apos;s input, in the semi-honest model, at the
+cost of more computation and more data per comparison.
+
+In this browser demo, both parties are simulated in one process; we use the GC
+engine to benchmark and compare cost vs the hash-only PSI.
+      </pre>
+	  
+    </div>
+	<section id="technical-notes" style="margin-top:3rem;">
+  <h2>Technical Notes: GC-Backed PSI with Keyed BLAKE3</h2>
+
+  <p>
+    This demo implements a small, self-contained private set intersection (PSI) core and a
+    Yao-style garbled circuit (GC) equality check, both compiled to WebAssembly. The browser
+    UI is just a thin wrapper around a C library that:
+  </p>
+
+  <ul>
+    <li>Hashes each input string with a keyed BLAKE3-based pseudorandom function.</li>
+    <li>Performs PSI in two ways:
+      <ul>
+        <li>a hash-only, naive O(n²) comparator, and</li>
+        <li>a GC-backed equality comparator built from AND/XOR/NOT gates.</li>
+      </ul>
+    </li>
+  </ul>
+
+  <h3>Set Model and Hashing</h3>
+
+  <p>
+    Let Alice and Bob hold finite sets of strings:
+    \(A = \{a_0,\dots,a_{n-1}\}\), \(B = \{b_0,\dots,b_{n-1}\}\).
+    We want the indicator mask
+    \[
+      m_i = \begin{cases}
+      1 & \text{if } \exists j : a_i = b_j \\
+      0 & \text{otherwise}
+      \end{cases}
+    \]
+    so that the intersection is \(I = \{ a_i \mid m_i = 1 \}\).
+  </p>
+
+  <p>
+    Direct string comparison is replaced by hashing into a fixed-length digest space.
+    In the C core, each string is mapped to a 128-bit digest using keyed BLAKE3 in MAC / PRF
+    mode, truncated to 16 bytes:
+  </p>
+
+  <pre><code>// Conceptual model for each element s
+H_k(s) = BLAKE3_keyed(k, s)[0..15]  // 16-byte (128-bit) digest
+
+A' = { H_k(a_0), …, H_k(a_{n-1}) }
+B' = { H_k(b_0), …, H_k(b_{n-1}) }</code></pre>
+
+  <p>
+    In the naive path, the PSI mask is then
+    \[
+      m_i = \bigvee_{j=0}^{n-1} [\,H_k(a_i) = H_k(b_j)\,].
+    \]
+    In the GC path, <em>the same digests</em> feed a Boolean equality circuit that computes a
+    single bit per pair \((i,j)\).
+  </p>
+
+  <h3>Bit-Level Equality Circuit</h3>
+
+  <p>
+    Fix an element bit width \(k = \texttt{elem_bits}\). Each 16-byte digest is treated as a
+    vector of bits:
+    \[
+      A_i = (a_i^{(0)},\dots,a_i^{(k-1)}),\quad
+      B_j = (b_j^{(0)},\dots,b_j^{(k-1)}).
+    \]
+    For each pair \((A_i,B_j)\) the circuit computes an equality bit
+    \(\mathsf{eq}(A_i,B_j) \in \{0,1\}\) as:
+  </p>
+
+  <pre><code>// Bitwise XOR and equality flags
+x_t  = a_i^{(t)} XOR b_j^{(t)}      for t = 0,…,k-1
+e_t  = NOT(x_t)                     // e_t = 1 iff bits match
+
+// Full equality = AND of all per-bit equalities
+eq   = e_0 AND e_1 AND … AND e_{k-1}</code></pre>
+
+  <p>
+    In circuit terms:
+  </p>
+
+  <ul>
+    <li>\(k\) <strong>XOR</strong> gates to compute \(x_t\),</li>
+    <li>\(k\) <strong>NOT</strong> gates to compute \(e_t\),</li>
+    <li>and a length-\(k\) <strong>AND</strong> chain to fold all \(e_t\) into a single output bit.</li>
+  </ul>
+
+  <p>
+    The GC backend allocates wires for all input bits and internal results,
+    then builds this gate pattern for arbitrary <code>elem_bits</code>, not just 128; the output wire
+    carries <code>eq ∈ {0,1}</code> for the given pair of digests.
+  </p>
+
+  <h3>Yao Garbled Circuits and Free-XOR</h3>
+
+  <p>
+    Yao’s protocol encodes each wire \(w\) with two random <em>labels</em>
+    \(L_w^0, L_w^1 \in \{0,1\}^{\lambda}\), where \(\lambda\) is the label length
+    (here 128 bits). Instead of sending bits, the garbler sends labels;
+    correctness and privacy follow from the fact that labels look random unless
+    the evaluator has the right keys.
+  </p>
+
+  <p>
+    This implementation uses the classic <strong>free-XOR</strong> optimization: pick a single
+    global offset \(\Delta \in \{0,1\}^{\lambda}\) with the least significant bit set, and enforce
+  </p>
+
+  <pre><code>// Label relationship for every wire w
+L_w^1 = L_w^0 XOR Δ,     with  L_w^0 chosen pseudorandomly
+
+// "permute bit" = LSB of first byte, used to index table rows
+permute_bit(L_w^b) = L_w^b[0] & 1</code></pre>
+
+  <p>
+    For XOR gates, this makes garbling free:
+    \[
+      L_{\text{out}}^0 = L_{in0}^0 \oplus L_{in1}^0,\quad
+      L_{\text{out}}^1 = L_{\text{out}}^0 \oplus \Delta,
+    \]
+    so the evaluator just XORs input labels and does not need any ciphertexts
+    at all for XOR gates.
+  </p>
+
+  <h3>Gate Encryption with Keyed BLAKE3</h3>
+
+  <p>
+    Non-XOR gates (AND / NOT) still have a four-row garbled table. For each gate
+    index \(g\) and each pair of input bits \((a,b) \in \{0,1\}^2\), we choose the
+    correct output label
+    \(K_{\text{out}} = L_{\text{out}}^{f(a,b)}\), where \(f\) is the gate’s truth table.
+    Then we encrypt it under a PRF derived from the input labels:
+  </p>
+
+  <pre><code>// Conceptual pseudocode for a non-XOR gate row
+row      = (permute_bit(K_a) &lt;&lt; 1) | permute_bit(K_b)
+keystream = BLAKE3_keyed(GC_PRF_KEY, K_a || K_b || gate_index || row)
+cipher[row] = K_out XOR keystream</code></pre>
+
+  <p>
+    Here <code>GC_PRF_KEY</code> is a fixed 32-byte key; BLAKE3 in keyed mode acts as a
+    pseudorandom function on the concatenated labels and gate metadata.
+    At evaluation time, the evaluator:
+  </p>
+
+  <ol>
+    <li>Looks up the row using permute bits of the input labels.</li>
+    <li>Recomputes the same keystream with BLAKE3.</li>
+    <li>XORs the ciphertext with the keystream to recover the output label.</li>
+  </ol>
+
+  <p>
+    Because the evaluator only ever decrypts exactly one row per gate, even a
+    simple one-time-pad style encryption (XOR with keystream) is secure in this
+    setting.
+  </p>
+
+  <h3>From Equality Bits to PSI</h3>
+
+  <p>
+    The PSI GC backend conceptually computes, for each element of Alice’s digest
+    set \(A'_i\):
+    \[
+      m_i = \bigvee_{j=0}^{n-1} \mathsf{eq}(A'_i, B'_j),
+    \]
+    where \(\mathsf{eq}\) is implemented as the GC equality circuit described above.
+    In this demo, all of that happens in a single process:
+  </p>
+
+  <ul>
+    <li>The browser hashes strings to digests using a BLAKE3-based WASM helper.</li>
+    <li>The C core runs PSI in both “hash-only” and “GC-backed” modes on those digests.</li>
+    <li>The JavaScript layer compares the two masks to ensure they match.</li>
+  </ul>
+
+  <p>
+    In a full two-party deployment, Alice and Bob would hold their inputs on
+    separate machines. They would then combine:
+  </p>
+
+  <ul>
+    <li>Oblivious transfer (OT) or similar to deliver input labels without
+        revealing bits, and</li>
+    <li>the same garbled equality circuit and keyed BLAKE3 PRFs as used here.</li>
+  </ul>
+
+  <p>
+    The result is that each party learns only the intersection of their sets,
+    and nothing else about the other party’s inputs, while the web demo here
+    exposes a single-process simulation that makes performance and correctness
+    visible.
+  </p>
+</section>
+
+  </div>
+
+  <script src="psi_gc.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
